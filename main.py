@@ -18,7 +18,6 @@ import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
 import os
 # from webdriver_manager.core.utils import ChromeType
@@ -105,13 +104,14 @@ def resolve_final_url_like_testepy(google_news_url: str, use_selenium: bool = Tr
             chrome_options.add_argument("--disable-dev-shm-usage")
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            chrome_options.add_argument("--user-agent=Mozilla/5.0")
 
             # 👉 aponta para o Chromium do Debian
             chrome_options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/chromium")
 
             # 👉 usa driver compatível com Chromium
-            service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+            # service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+            service = Service(os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver"))
             driver = webdriver.Chrome(service=service, options=chrome_options)
 
             driver.set_page_load_timeout(timeout)
