@@ -21,8 +21,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
 import os
-from webdriver_manager.core.utils import ChromeType
-
+# from webdriver_manager.core.utils import ChromeType
 
 # =========================
 # MODELS
