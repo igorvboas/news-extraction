@@ -18,8 +18,9 @@ import time
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException
 
-import os
+import os, time
 # from webdriver_manager.core.utils import ChromeType
 
 # =========================
@@ -95,30 +96,41 @@ def resolve_final_url_like_testepy(google_news_url: str, use_selenium: bool = Tr
         req_err = None
 
     # selenium (fallback)
+    # selenium (fallback)
     if use_selenium:
         driver = None
         try:
-            chrome_options = Options()
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0")
+            options = Options()
+            options.add_argument("--headless=new")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-zygote")
+            options.add_argument("--disable-software-rasterizer")
+            options.add_argument("--hide-scrollbars")
+            options.add_argument("--window-size=1920,1080")
+            options.add_argument("--user-agent=Mozilla/5.0")
 
-            # 👉 aponta para o Chromium do Debian
-            chrome_options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/chromium")
-
-            # 👉 usa driver compatível com Chromium
-            # service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
+            # 👉 binários dentro do container
+            options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/chromium")
             service = Service(os.getenv("CHROMEDRIVER_PATH", "/usr/bin/chromedriver"))
-            driver = webdriver.Chrome(service=service, options=chrome_options)
 
+            # 👉 não espere render completo
+            options.page_load_strategy = "eager"   # ("none" também funciona)
+
+            driver = webdriver.Chrome(service=service, options=options)
+
+            # tempo para a navegação; se estourar, ainda tentamos pegar current_url
             driver.set_page_load_timeout(timeout)
-            driver.get(google_news_url)
 
-            # dá tempo pro redirect via JS acontecer
-            time.sleep(2.2)
+            try:
+                driver.get(google_news_url)
+            except TimeoutException:
+                # ignore — normalmente já redirecionou
+                pass
+
+            # dá um respiro pro redirect JS concluir
+            time.sleep(2.0)
 
             final_url = driver.current_url
             if final_url and "news.google.com" not in final_url:
@@ -132,7 +144,6 @@ def resolve_final_url_like_testepy(google_news_url: str, use_selenium: bool = Tr
                 error=f"selenium: {e}"
             )
         finally:
-            # garante que fecha mesmo em erro
             try:
                 if driver:
                     driver.quit()
