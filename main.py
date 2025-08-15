@@ -20,6 +20,9 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+import os
+from webdriver_manager.core.utils import ChromeType
+
 
 # =========================
 # MODELS
@@ -95,6 +98,7 @@ def resolve_final_url_like_testepy(google_news_url: str, use_selenium: bool = Tr
 
     # selenium (fallback)
     if use_selenium:
+        driver = None
         try:
             chrome_options = Options()
             chrome_options.add_argument("--headless=new")
@@ -104,27 +108,38 @@ def resolve_final_url_like_testepy(google_news_url: str, use_selenium: bool = Tr
             chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
-            service = Service(ChromeDriverManager().install())
+            # 👉 aponta para o Chromium do Debian
+            chrome_options.binary_location = os.getenv("CHROME_BIN", "/usr/bin/chromium")
+
+            # 👉 usa driver compatível com Chromium
+            service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
             driver = webdriver.Chrome(service=service, options=chrome_options)
+
             driver.set_page_load_timeout(timeout)
             driver.get(google_news_url)
-            time.sleep(2.2)  # tempo para redirect JS
-            final_url = driver.current_url
-            driver.quit()
 
+            # dá tempo pro redirect via JS acontecer
+            time.sleep(2.2)
+
+            final_url = driver.current_url
             if final_url and "news.google.com" not in final_url:
                 return ResolveOneResponse(original=google_news_url, final=final_url, method="selenium")
+
         except Exception as e:
-            try:
-                driver.quit()
-            except Exception:
-                pass
             return ResolveOneResponse(
                 original=google_news_url,
                 final=None,
                 method="error",
                 error=f"selenium: {e}"
             )
+        finally:
+            # garante que fecha mesmo em erro
+            try:
+                if driver:
+                    driver.quit()
+            except Exception:
+                pass
+
 
     # sem mudança
     return ResolveOneResponse(
