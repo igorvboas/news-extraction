@@ -10,4 +10,4 @@ lxml==4.9.3
 
 # Selenium para resolver URLs finais
 selenium==4.15.2
-webdriver-manager==4.0.1
+# webdriver-manager==4.0.1 (tirar para rodar no linux)
