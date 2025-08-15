@@ -1,18 +1,13 @@
-# Others
-certifi==2023.7.22
-charset-normalizer==3.2.0
-idna==3.4
-soupsieve==2.4.1
-urllib3==2.0.4
+# API Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
 
 # Scraping
 requests==2.31.0
 beautifulsoup4==4.12.2
 lxml==4.9.3
 
-# API Framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-
-# Utils
-python-multipart==0.0.6
+# Selenium para resolver URLs finais
+selenium==4.15.2
+webdriver-manager==4.0.1
