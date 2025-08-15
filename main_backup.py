@@ -1,25 +1,23 @@
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Literal
-import uvicorn
+from typing import List, Optional, Dict
 
-# --- scraping / requests
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs, urljoin, quote
 import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import uvicorn
 import time
 
-# --- selenium (igual ao teste.py, com Service correto)
+# === Selenium exatamente como no teste.py ===
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 
+from selenium.webdriver.chrome.service import Service
 
 # =========================
 # MODELS
@@ -27,7 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 class NewsArticle(BaseModel):
     title: str = Field(..., description="Título da notícia")
     source: str = Field("", description="Fonte da notícia")
-    url: str = Field("", description="URL da notícia (ORIGINAL do Google News)")
+    url: str = Field("", description="URL da notícia (final, resolvida)")
     time_text: str = Field("", description="Texto do tempo (ex: '2 horas atrás')")
     published_at: str = Field("", description="Data e hora da notícia (ISO format)")
     description: str = Field("", description="Descrição/snippet")
@@ -49,101 +47,82 @@ class ErrorResponse(BaseModel):
     details: str = ""
 
 
-class ResolveOneResponse(BaseModel):
-    original: str
-    final: Optional[str] = None
-    method: Literal["requests", "selenium", "unchanged", "error"]
-    error: Optional[str] = None
-
-
-class ResolveBatchRequest(BaseModel):
-    urls: List[str]
-    use_selenium: bool = True
-    timeout: int = 15
-    max_workers: int = 6
-
-
-class ResolveBatchResponse(BaseModel):
-    success: bool = True
-    results: List[ResolveOneResponse]
-
-
 # =========================
-# RESOLVER (EXATAMENTE teste.py)
+# RESOLVER -> EXATAMENTE A MESMA METODOLOGIA DO teste.py (com logs)
 # =========================
-def resolve_final_url_like_testepy(google_news_url: str, use_selenium: bool = True, timeout: int = 15) -> ResolveOneResponse:
+def get_final_url_complete(google_news_url: str) -> Optional[str]:
     """
     1) requests.get(..., allow_redirects=True)
-    2) se continuar em news.google.com e use_selenium=True, Selenium headless
+    2) se ainda for news.google.com, Selenium headless (driver.current_url)
     """
     if not google_news_url:
-        return ResolveOneResponse(original="", final=None, method="error", error="empty url")
+        print("RESOLVER: URL vazia")
+        return None
 
-    # requests
+    print(f"RESOLVER: iniciando para {google_news_url}")
+
+    # 1) Requests
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://news.google.com/",
         }
-        r = requests.get(google_news_url, headers=headers, allow_redirects=True, timeout=timeout)
+        r = requests.get(google_news_url, headers=headers, allow_redirects=True, timeout=15)
+        print(f"RESOLVER[requests]: status={r.status_code} final={r.url}")
         if r.url and "news.google.com" not in r.url:
-            return ResolveOneResponse(original=google_news_url, final=r.url, method="requests")
+            print(f"RESOLVER[requests]: OK -> {r.url}")
+            return r.url
     except Exception as e:
-        req_err = str(e)
-    else:
-        req_err = None
+        print(f"RESOLVER[requests]: erro {e!r}")
 
-    # selenium (fallback)
-    if use_selenium:
+    # 2) Selenium
+    try:
+        chrome_options = Options()
+        chrome_options.add_argument("--headless=new")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--window-size=1920,1080")
+        chrome_options.add_argument(
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        )
+
+        # driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+        
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=chrome_options)
+        driver.set_page_load_timeout(20)
+        driver.get(google_news_url)
+        time.sleep(2.5)  # tempo para redirects JS
+        final_url = driver.current_url
+        print(f"RESOLVER[selenium]: final={final_url}")
+        driver.quit()
+
+        if final_url and "news.google.com" not in final_url:
+            print(f"RESOLVER[selenium]: OK -> {final_url}")
+            return final_url
+    except Exception as e:
+        print(f"RESOLVER[selenium]: erro {e!r}")
         try:
-            chrome_options = Options()
-            chrome_options.add_argument("--headless=new")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--window-size=1920,1080")
-            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-            service = Service(ChromeDriverManager().install())
-            driver = webdriver.Chrome(service=service, options=chrome_options)
-            driver.set_page_load_timeout(timeout)
-            driver.get(google_news_url)
-            time.sleep(2.2)  # tempo para redirect JS
-            final_url = driver.current_url
             driver.quit()
+        except Exception:
+            pass
 
-            if final_url and "news.google.com" not in final_url:
-                return ResolveOneResponse(original=google_news_url, final=final_url, method="selenium")
-        except Exception as e:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-            return ResolveOneResponse(
-                original=google_news_url,
-                final=None,
-                method="error",
-                error=f"selenium: {e}"
-            )
-
-    # sem mudança
-    return ResolveOneResponse(
-        original=google_news_url,
-        final=google_news_url,
-        method="unchanged",
-        error=req_err
-    )
+    print("RESOLVER: não conseguiu sair de news.google.com")
+    return None
 
 
 # =========================
-# SCRAPER (BUSCA)
+# SCRAPER (busca no Google News)
 # =========================
 class GoogleNewsScraper:
     def __init__(self):
         self.base_url = "https://news.google.com/search"
+        # sessão só para BUSCA (não para resolver link)
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
             "Connection": "keep-alive",
@@ -216,7 +195,7 @@ class GoogleNewsScraper:
             if not title or len(title) < 6:
                 continue
 
-            # link (ORIGINAL do Google)
+            # link
             link_el = el if el.name == "a" else el.find("a", href=True)
             url = ""
             if link_el:
@@ -247,14 +226,14 @@ class GoogleNewsScraper:
                     desc = node.get_text(strip=True)
                     break
 
-            # filtro por tempo
+            # filtro por janela de tempo
             if days and dt and not self._is_within_days(dt, days):
                 continue
 
             results.append({
                 "title": title,
                 "source": source,
-                "url": url,  # <-- mantém o ORIGINAL do Google
+                "url": url,
                 "time_text": time_text,
                 "datetime": dt,
                 "description": desc,
@@ -268,8 +247,8 @@ class GoogleNewsScraper:
 # =========================
 app = FastAPI(
     title="Google News Scraper API",
-    description="Busca notícias no Google News (URL original). Endpoint separado para resolver URL final (requests + Selenium).",
-    version="3.0.0",
+    description="Busca notícias no Google News e resolve a URL final da matéria (requests + Selenium).",
+    version="2.0.1",
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -289,19 +268,15 @@ async def root():
     <html><head><title>Google News Scraper API</title></head>
     <body style="font-family:Arial;padding:24px">
       <h1>🗞️ Google News Scraper API</h1>
-      <ul>
-        <li><strong>/search</strong> → retorna URLs ORIGINAIS do Google News (rápido)</li>
-        <li><strong>GET /resolve?u=URL</strong> → resolve uma URL (requests → Selenium)</li>
-        <li><strong>POST /resolve</strong> com {"urls":[...]} → resolve em lote (paralelo)</li>
-      </ul>
-      <p>Veja <a href="/docs">/docs</a>.</p>
+      <p>Usa <code>requests</code> e, se necessário, <code>Selenium headless</code> — exatamente como no seu <code>teste.py</code>.</p>
+      <p>Teste em <a href="/docs">/docs</a>.</p>
     </body></html>
     """
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "ts": datetime.now().isoformat(), "version": "3.0.0"}
+    return {"status": "ok", "ts": datetime.now().isoformat(), "version": "2.0.1"}
 
 
 @app.get(
@@ -313,34 +288,45 @@ async def search_news(
     person_name: str = Query(..., min_length=2, max_length=100, example="Renato Cariani"),
     days_back: int = Query(30, ge=1, le=365),
     max_results: int = Query(20, ge=1, le=100),
+    resolve_final: bool = Query(True, description="Resolve a URL final via requests + Selenium (igual teste.py)"),
 ):
     """
-    Importante: este endpoint devolve **apenas** a URL ORIGINAL do Google News.
-    Use /resolve para converter em URL final do veículo.
+    Para cada resultado do domínio news.google.com, chama get_final_url_complete(...)
+    exatamente como no teste.py. Logs no console mostram por onde resolveu.
     """
     try:
         if not person_name.strip():
             raise HTTPException(status_code=400, detail="Nome da pessoa não pode estar vazio")
 
-        raw = scraper.search_news(
+        raw_articles = scraper.search_news(
             person_name=person_name.strip(),
             days=days_back,
             max_results=max_results
         )
 
         articles: List[NewsArticle] = []
-        for a in raw:
+        for a in raw_articles:
             published_at = a.get("datetime").isoformat() if a.get("datetime") else ""
             a.pop("datetime", None)
 
-            articles.append(NewsArticle(**{
-                "title": a.get("title", ""),
-                "source": a.get("source", ""),
-                "url": a.get("url", ""),  # mantém Google
-                "time_text": a.get("time_text", ""),
-                "published_at": published_at,
-                "description": a.get("description", ""),
-            }))
+            if resolve_final and isinstance(a.get("url"), str) and "news.google.com" in a["url"]:
+                url_norm = scraper._normalize_gnews_href(a["url"])
+                final = get_final_url_complete(url_norm)
+                if final:
+                    a["url"] = final
+
+            try:
+                articles.append(NewsArticle(**{
+                    "title": a.get("title", ""),
+                    "source": a.get("source", ""),
+                    "url": a.get("url", ""),
+                    "time_text": a.get("time_text", ""),
+                    "published_at": published_at,
+                    "description": a.get("description", ""),
+                }))
+            except Exception as e:
+                print(f"API: erro ao montar NewsArticle: {e!r}")
+                continue
 
         return SearchResponse(
             success=True,
@@ -357,42 +343,6 @@ async def search_news(
         raise HTTPException(status_code=500, detail=f"Erro interno: {e}")
 
 
-# ---------- RESOLVE (unitária) ----------
-@app.get("/resolve", response_model=ResolveOneResponse, responses={400: {"model": ErrorResponse}})
-async def resolve_one(
-    u: str = Query(..., description="URL (normalmente news.google.com/read/...)"),
-    use_selenium: bool = Query(True),
-    timeout: int = Query(15, ge=3, le=60),
-):
-    if not u:
-        raise HTTPException(status_code=400, detail="Parâmetro 'u' é obrigatório")
-    result = resolve_final_url_like_testepy(u, use_selenium=use_selenium, timeout=timeout)
-    return result
-
-
-# ---------- RESOLVE (lote) ----------
-@app.post("/resolve", response_model=ResolveBatchResponse, responses={400: {"model": ErrorResponse}})
-async def resolve_batch(body: ResolveBatchRequest = Body(...)):
-    if not body.urls:
-        raise HTTPException(status_code=400, detail="Lista 'urls' vazia")
-
-    results: List[ResolveOneResponse] = []
-    # paralelismo simples (I/O bound)
-    with ThreadPoolExecutor(max_workers=max(1, body.max_workers)) as ex:
-        future_map = {
-            ex.submit(resolve_final_url_like_testepy, u, body.use_selenium, body.timeout): u
-            for u in body.urls
-        }
-        for fut in as_completed(future_map):
-            try:
-                results.append(fut.result())
-            except Exception as e:
-                u = future_map[fut]
-                results.append(ResolveOneResponse(original=u, final=None, method="error", error=str(e)))
-
-    return ResolveBatchResponse(results=results)
-
-
 if __name__ == "__main__":
-    print("🚀 Iniciando Google News Scraper API (3.0.0)...")
+    print("🚀 Iniciando Google News Scraper API (2.0.1)...")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
